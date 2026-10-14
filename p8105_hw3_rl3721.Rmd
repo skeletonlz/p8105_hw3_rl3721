@@ -1,0 +1,675 @@
+---
+title: "Homework 3"
+author: "Rachel Liu"
+date: "2026-10-14"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(p8105.datasets)
+library(patchwork)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 5,
+  out.width = "90%"
+)
+```
+
+# Problem 1
+```{r}
+data("ny_noaa")
+
+dim(ny_noaa)
+glimpse(ny_noaa)
+range(ny_noaa$date)
+```
+
+```{r}
+missing_summary =
+  ny_noaa |>
+  summarise(
+    across(everything(), ~ sum(is.na(.)))
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "missing"
+  ) |>
+  mutate(
+    percent_missing = 100 * missing / nrow(ny_noaa)
+  )
+
+missing_summary
+```
+
+## Data cleaning
+
+```{r}
+noaa_clean =
+  ny_noaa |>
+  mutate(
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    tmax = as.numeric(tmax) / 10,
+    tmin = as.numeric(tmin) / 10,
+    prcp = prcp / 10
+  )
+
+glimpse(noaa_clean)
+```
+
+```{r}
+snow_common =
+  noaa_clean |>
+  count(snow, sort = TRUE) |>
+  slice_head(n = 10)
+
+snow_common
+```
+
+## Average maximum temperature in January and July
+
+```{r}
+jan_july =
+  noaa_clean |>
+  filter(month %in% c(1, 7)) |>
+  group_by(id, year, month) |>
+  summarise(
+    mean_tmax = mean(tmax, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(!is.nan(mean_tmax)) |>
+  mutate(
+    month = factor(
+      month,
+      levels = c(1, 7),
+      labels = c("January", "July")
+    )
+  )
+
+jan_july
+```
+
+```{r}
+ggplot(
+  jan_july,
+  aes(
+    x = year,
+    y = mean_tmax,
+    group = id,
+    color = id
+  )
+) +
+  geom_line(alpha = 0.4) +
+  geom_point(alpha = 0.4, size = 0.7) +
+  facet_grid(. ~ month) +
+  labs(
+    title = "Average Maximum Temperature by Station",
+    x = "Year",
+    y = "Average Maximum Temperature (°C)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none"
+  )
+```
+
+As expected, average maximum temperatures are much lower in January than in July. There is also variation across stations and years, reflecting geographic differences and year-to-year weather variation. Any isolated station-year values that fall well outside the general pattern can be considered possible outliers and should be interpreted carefully.
+
+## Maximum versus minimum temperature and snowfall distribution
+
+```{r}
+temp_plot =
+  noaa_clean |>
+  filter(
+    !is.na(tmax),
+    !is.na(tmin)
+  ) |>
+  ggplot(
+    aes(
+      x = tmin,
+      y = tmax
+    )
+  ) +
+  geom_bin_2d(bins = 40) +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(
+    title = "Maximum vs Minimum Temperature",
+    x = "Minimum Temperature (°C)",
+    y = "Maximum Temperature (°C)",
+    fill = "Count"
+  ) +
+  theme_minimal()
+
+temp_plot
+```
+
+There is a strong positive relationship between minimum and maximum temperature: days with higher minimum temperatures generally also have higher maximum temperatures. The binned display makes this relationship easier to see than a standard scatterplot because many observations occur in similar regions of the plot.
+
+For snowfall, I restrict the data to positive snowfall amounts below 100 mm and compare the distributions across years.
+
+```{r}
+snow_plot =
+  noaa_clean |>
+  filter(
+    snow > 0,
+    snow < 100
+  ) |>
+  ggplot(
+    aes(
+      x = factor(year),
+      y = snow
+    )
+  ) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  labs(
+    title = "Distribution of Snowfall by Year",
+    x = "Year",
+    y = "Snowfall (mm)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 90,
+      hjust = 1,
+      size = 7
+    )
+  )
+
+snow_plot
+```
+
+The snowfall distributions vary across years, although most positive snowfall observations below 100 mm remain concentrated at relatively low values. Some years may contain larger or more variable snowfall amounts than others.
+
+```{r}
+temp_plot / snow_plot
+```
+
+Overall, the temperature variables show a clear positive association, while snowfall is strongly concentrated at zero in the full dataset and has a right-skewed distribution among positive snowfall values.
+
+# Problem 2
+
+```{r}
+nhanes_accel =
+  read_csv(
+    "data/nhanes_accel.csv",
+    show_col_types = FALSE
+  )
+
+nhanes_covar =
+  read_csv(
+    "data/nhanes_covar.csv",
+    skip = 4,
+    show_col_types = FALSE
+  )
+
+dim(nhanes_accel)
+dim(nhanes_covar)
+
+glimpse(nhanes_accel)
+glimpse(nhanes_covar)
+```
+
+## Data cleaning
+```{r}
+nhanes_covar_clean =
+  nhanes_covar |>
+  filter(age >= 21) |>
+  drop_na() |>
+  mutate(
+    sex = factor(
+      sex,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    education = factor(
+      education,
+      levels = c(1, 2, 3),
+      labels = c(
+        "Less than high school",
+        "High school equivalent",
+        "More than high school"
+      )
+    )
+  )
+
+dim(nhanes_covar_clean)
+glimpse(nhanes_covar_clean)
+```
+
+```{r}
+nhanes_accel_long =
+  nhanes_accel |>
+  pivot_longer(
+    cols = min1:min1440,
+    names_to = "minute",
+    values_to = "mims"
+  ) |>
+  mutate(
+    minute = parse_number(minute),
+    hour = (minute - 1) / 60
+  )
+
+glimpse(nhanes_accel_long)
+```
+
+```{r}
+nhanes_data =
+  nhanes_accel_long |>
+  inner_join(
+    nhanes_covar_clean,
+    by = "SEQN"
+  )
+
+glimpse(nhanes_data)
+
+n_distinct(nhanes_data$SEQN)
+```
+
+## Sex and education
+
+```{r}
+sex_education_table =
+  nhanes_covar_clean |>
+  count(
+    education,
+    sex
+  ) |>
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  )
+
+knitr::kable(
+  sex_education_table,
+  caption = "Number of Participants by Education and Sex"
+)
+```
+
+This table shows how the analytic sample is distributed across sex and education groups. The counts make it easier to identify whether some groups contain substantially more participants than others.
+
+```{r}
+ggplot(
+  nhanes_covar_clean,
+  aes(
+    x = age,
+    fill = sex
+  )
+) +
+  geom_histogram(
+    position = "identity",
+    alpha = 0.5,
+    bins = 20
+  ) +
+  facet_wrap(
+    ~ education,
+    nrow = 1
+  ) +
+  labs(
+    title = "Age Distribution by Sex and Education",
+    x = "Age (years)",
+    y = "Number of Participants",
+    fill = "Sex"
+  ) +
+  theme_minimal()
+```
+
+The panels allow the age distributions of men and women to be compared within each education level. Differences in the center and spread of the distributions may indicate demographic differences across education groups.
+
+## Total daily activity
+
+```{r}
+total_activity =
+  nhanes_data |>
+  group_by(
+    SEQN,
+    sex,
+    age,
+    BMI,
+    education
+  ) |>
+  summarise(
+    total_activity = sum(mims, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+glimpse(total_activity)
+```
+
+```{r}
+ggplot(
+  total_activity,
+  aes(
+    x = age,
+    y = total_activity,
+    color = sex
+  )
+) +
+  geom_point(
+    alpha = 0.6
+  ) +
+  geom_smooth(
+    se = FALSE
+  ) +
+  facet_wrap(
+    ~ education,
+    nrow = 1
+  ) +
+  labs(
+    title = "Total Daily Activity by Age, Sex, and Education",
+    x = "Age (years)",
+    y = "Total Daily MIMS",
+    color = "Sex"
+  ) +
+  theme_minimal()
+```
+
+The plot shows how total daily activity changes with age and allows comparisons between men and women within each education group. The smoothed curves help reveal overall trends that may be difficult to see from the individual observations alone.
+
+## Activity over the course of the day
+
+```{r}
+activity_time =
+  nhanes_data |>
+  group_by(
+    education,
+    sex,
+    minute,
+    hour
+  ) |>
+  summarise(
+    mean_mims = mean(
+      mims,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+glimpse(activity_time)
+```
+
+The following three-panel plot shows average activity throughout the day for each education level, with color indicating sex.
+
+```{r}
+ggplot(
+  activity_time,
+  aes(
+    x = hour,
+    y = mean_mims,
+    color = sex
+  )
+) +
+  geom_line(
+    alpha = 0.4
+  ) +
+  geom_smooth(
+    se = FALSE,
+    span = 0.08
+  ) +
+  facet_wrap(
+    ~ education,
+    nrow = 1
+  ) +
+  scale_x_continuous(
+    breaks = c(0, 6, 12, 18, 24),
+    limits = c(0, 24)
+  ) +
+  labs(
+    title = "24-Hour Activity Patterns by Education and Sex",
+    x = "Hour of Day",
+    y = "Average MIMS",
+    color = "Sex"
+  ) +
+  theme_minimal()
+```
+
+Activity should generally be lowest during overnight hours and higher during waking hours. The three panels and separate curves make it possible to compare daily activity patterns across education levels and between men and women.
+
+# Problem 3
+```{r}
+citi_2020_jan =
+  read_csv(
+    "data/Jan 2020 Citi.csv",
+    show_col_types = FALSE
+  ) |>
+  mutate(
+    year = 2020,
+    month = "January"
+  )
+
+citi_2020_jul =
+  read_csv(
+    "data/July 2020 Citi.csv",
+    show_col_types = FALSE
+  ) |>
+  mutate(
+    year = 2020,
+    month = "July"
+  )
+
+citi_2024_jan =
+  read_csv(
+    "data/Jan 2024 Citi.csv",
+    show_col_types = FALSE
+  ) |>
+  mutate(
+    year = 2024,
+    month = "January"
+  )
+
+citi_2024_jul =
+  read_csv(
+    "data/July 2024 Citi.csv",
+    show_col_types = FALSE
+  ) |>
+  mutate(
+    year = 2024,
+    month = "July"
+  )
+
+citi_raw =
+  bind_rows(
+    citi_2020_jan,
+    citi_2020_jul,
+    citi_2024_jan,
+    citi_2024_jul
+  )
+
+dim(citi_raw)
+glimpse(citi_raw)
+```
+
+## Data cleaning
+```{r}
+citi_clean =
+  citi_raw |>
+  mutate(
+    month = factor(
+      month,
+      levels = c("January", "July")
+    ),
+    weekdays = factor(
+      weekdays,
+      levels = c(
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday"
+      )
+    ),
+    member_casual = factor(
+      member_casual,
+      levels = c("casual", "member"),
+      labels = c("Casual", "Member")
+    )
+  ) |>
+  filter(
+    !is.na(duration),
+    duration > 0
+  )
+
+dim(citi_clean)
+glimpse(citi_clean)
+range(citi_clean$duration)
+```
+
+## Number of rides by year, month, and membership status
+
+```{r}
+ride_count_table =
+  citi_clean |>
+  count(
+    year,
+    month,
+    member_casual
+  ) |>
+  pivot_wider(
+    names_from = member_casual,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  arrange(
+    year,
+    month
+  )
+
+knitr::kable(
+  ride_count_table,
+  caption = "Number of Citi Bike Rides by Year, Month, and Membership Status"
+)
+```
+
+This table compares Citi Bike usage between January and July and between 2020 and 2024. It also shows how the number of rides differs between casual riders and Citi Bike members.
+
+## Five most popular starting stations in July 2024
+
+```{r}
+top_stations =
+  citi_clean |>
+  filter(
+    year == 2024,
+    month == "July",
+    !is.na(start_station_name),
+    start_station_name != ""
+  ) |>
+  count(
+    start_station_name,
+    sort = TRUE
+  ) |>
+  slice_head(n = 5)
+
+knitr::kable(
+  top_stations,
+  col.names = c(
+    "Starting Station",
+    "Number of Rides"
+  ),
+  caption = "Five Most Popular Starting Stations in July 2024"
+)
+```
+
+These are the five most frequently used starting stations in the July 2024 sample.
+
+## Median ride duration
+
+```{r}
+median_duration =
+  citi_clean |>
+  group_by(
+    year,
+    month,
+    weekdays
+  ) |>
+  summarise(
+    median_duration = median(
+      duration,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+median_duration
+```
+
+```{r}
+ggplot(
+  median_duration,
+  aes(
+    x = weekdays,
+    y = median_duration,
+    color = month,
+    group = month
+  )
+) +
+  geom_line(
+    linewidth = 1
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  facet_wrap(
+    ~ year
+  ) +
+  labs(
+    title = "Median Ride Duration by Day, Month, and Year",
+    x = "Day of Week",
+    y = "Median Ride Duration (minutes)",
+    color = "Month"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+```
+
+This figure allows comparison of ride duration across weekdays and weekends, between January and July, and between 2020 and 2024. Differences may reflect seasonal riding patterns as well as differences between commuting and recreational use.
+
+## Ride duration in 2024
+```{r}
+citi_2024 =
+  citi_clean |>
+  filter(year == 2024)
+
+ggplot(
+  citi_2024,
+  aes(
+    x = duration,
+    color = rideable_type,
+    fill = rideable_type
+  )
+) +
+  geom_density(
+    alpha = 0.20,
+    linewidth = 0.8
+  ) +
+  facet_grid(
+    member_casual ~ month
+  ) +
+  coord_cartesian(
+    xlim = c(0, 60)
+  ) +
+  labs(
+    title = "Ride Duration in 2024",
+    subtitle = "By Month, Membership Status, and Bike Type",
+    x = "Ride Duration (minutes)",
+    y = "Density",
+    color = "Bike Type",
+    fill = "Bike Type"
+  ) +
+  theme_minimal()
+```
+
+This plot compares the distribution of ride duration between casual riders and members in January and July. The separate curves also show whether ride duration differs between classic and electric bikes.
